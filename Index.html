@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <base target="_top">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root {font-family:system-ui,-apple-system,'Noto Sans KR',sans-serif;color:#182435;background:#f4f6fa}
+    *{box-sizing:border-box}body{margin:0}main{max-width:680px;margin:0 auto;padding:26px 16px 60px}
+    h1{font-size:24px;margin:0 0 8px}p{color:#526174;line-height:1.55}
+    .panel,.card{background:white;border:1px solid #e1e5ec;border-radius:14px;padding:18px;margin:16px 0}
+    label{display:block;font-weight:650;margin:14px 0 7px}input,select,button{font:inherit}
+    input,select{width:100%;padding:12px;border:1px solid #b9c3d0;border-radius:9px;background:white;min-height:46px}
+    button{border:0;border-radius:9px;padding:13px 18px;background:#193c68;color:white;font-weight:700;cursor:pointer;min-height:46px}
+    button:disabled{opacity:.5;cursor:wait}.search{display:flex;gap:8px}.search input{flex:1;min-width:0}
+    .search button{white-space:nowrap}.meta{font-size:14px;color:#526174}.card h3{margin:0 0 8px}
+    #save{width:100%;margin-top:12px}.hidden{display:none!important}
+    #message{min-height:24px;font-size:14px;font-weight:600}.error{color:#b42318}.success{color:#146c43}
+  </style>
+</head>
+<body>
+<main>
+  <h1>JJAS 굿즈 수령 확인</h1>
+  <p>이름을 검색한 뒤 주문한 굿즈의 수령 여부와 사이즈를 확인해 주세요. 저장한 내용은 나중에 다시 수정할 수 있습니다.</p>
+  <section class="panel">
+    <label for="name">주문자 이름</label>
+    <div class="search"><input id="name" placeholder="이름을 입력하세요" autocomplete="name"><button id="searchBtn" onclick="searchOrders()">검색</button></div>
+  </section>
+  <p id="message" role="status" aria-live="polite"></p>
+  <section id="results" class="hidden">
+    <h2 id="resultTitle">주문 내역</h2>
+    <div id="cards"></div>
+    <button id="save" onclick="save()">변경사항 저장</button>
+  </section>
+</main>
+<script>
+let currentName = '';
+let orders = [];
+const $ = id => document.getElementById(id);
+const setMessage = (msg, type='') => { $('message').textContent=msg; $('message').className=type; };
+const escapeHtml = s => String(s ?? '').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function busy(value){$('searchBtn').disabled=value;$('save').disabled=value;}
+function searchOrders(){
+  const name=$('name').value.trim();
+  $('results').classList.add('hidden');orders=[];currentName='';
+  if(!name){setMessage('이름을 입력해 주세요.','error');return;}
+  busy(true);setMessage('주문 내역을 불러오는 중입니다.');
+  google.script.run.withSuccessHandler(data=>{
+    busy(false);
+    if(!data.length){setMessage('해당 이름의 주문 내역이 없습니다.','error');return;}
+    currentName=name;orders=data;render();setMessage(`${data.length}건의 주문 내역을 찾았습니다.`);
+  }).withFailureHandler(err=>{busy(false);setMessage(err.message||'조회에 실패했습니다.','error');}).findOrders(name);
+}
+function options(values, selected){return values.map(v=>`<option value="${escapeHtml(v)}" ${v===selected?'selected':''}>${escapeHtml(v||'선택해 주세요')}</option>`).join('');}
+function render(){
+  $('resultTitle').textContent=`${currentName}님의 주문 내역`;
+  $('cards').innerHTML=orders.map((o,i)=>`<article class="card" data-index="${i}">
+    <h3>${escapeHtml(o.item)}</h3>
+    <div class="meta">주문 사이즈: ${escapeHtml(o.orderedSize||'없음')} · 수량: ${escapeHtml(o.quantity)}개</div>
+    <label for="received-${i}">수령 여부</label>
+    <select id="received-${i}" class="received" onchange="toggle(${i})">${options(['','수령 완료','미수령'],o.received)}</select>
+    ${o.orderedSize?`<div id="size-area-${i}">
+      <label for="size-${i}">받은 굿즈의 사이즈가 주문 사이즈와 일치하나요?</label>
+      <select id="size-${i}" class="size-check" onchange="toggle(${i})">${options(['','일치','불일치','확인하지 못함'],o.sizeCheck)}</select>
+      <div id="actual-area-${i}"><label for="actual-${i}">실제로 받은 사이즈</label>
+      <input id="actual-${i}" class="actual-size" value="${escapeHtml(o.actualSize)}" placeholder="예: 95 또는 XL" maxlength="50"></div>
+    </div>`:''}
+  </article>`).join('');
+  orders.forEach((_,i)=>toggle(i));$('results').classList.remove('hidden');
+}
+function toggle(i){
+  const received=$(`received-${i}`).value;
+  const area=$(`size-area-${i}`);if(!area)return;
+  area.classList.toggle('hidden',received!=='수령 완료');
+  const actual=$(`actual-area-${i}`);actual.classList.toggle('hidden',received!=='수령 완료'||$(`size-${i}`).value!=='불일치');
+}
+function save(){
+  const updates=orders.map((o,i)=>({id:o.id,received:$(`received-${i}`).value,
+    sizeCheck:o.orderedSize&&$(`received-${i}`).value==='수령 완료'?$(`size-${i}`).value:'',
+    actualSize:o.orderedSize&&$(`received-${i}`).value==='수령 완료'&&$(`size-${i}`).value==='불일치'?$(`actual-${i}`).value.trim():''}));
+  if(updates.some(u=>u.sizeCheck==='불일치'&&!u.actualSize)){
+    setMessage('사이즈가 불일치한 굿즈의 실제 수령 사이즈를 입력해 주세요.','error');return;
+  }
+  busy(true);setMessage('저장 중입니다.');
+  google.script.run.withSuccessHandler(()=>{
+    busy(false);setMessage('저장되었습니다. 다시 접속해도 응답이 유지됩니다.','success');
+  }).withFailureHandler(err=>{busy(false);setMessage(err.message||'저장에 실패했습니다.','error');}).saveOrders(currentName,updates);
+}
+$('name').addEventListener('keydown',e=>{if(e.key==='Enter')searchOrders();});
+</script>
+</body>
+</html>
